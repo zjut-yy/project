@@ -1,0 +1,127 @@
+/* SpaceTimeCube 主组件样式 */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 控制面板 */
+.controlPanel {
+  padding: 10px;
+  background: #f5f5f5;
+  border-radius: 2px;
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.layerControls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.layerLabel {
+  font-weight: bold;
+}
+
+.checkboxLabel {
+  display: flex;
+  font-size: 12px;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.boundaryModeSelect {
+  padding: 2px 6px;
+  font-size: 13px;
+  border: 1px solid #d9d9d9;
+  border-radius: 2px;
+  cursor: pointer;
+  background: #fff;
+}
+
+/* 3D渲染区域 */
+.renderContainer {
+  background: #ffffff;
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 加载提示 */
+.loadingOverlay {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  font-size: 14px;
+}
+
+/* 空状态提示 */
+.emptyState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f5f5;
+}
+
+.emptyStateText {
+  color: #666;
+}
+
+/* 视角切换控件 */
+.viewModeControl {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  padding: 6px 8px;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 10;
+}
+
+.viewModeLabel {
+  font-size: 12px;
+  font-weight: 500;
+  color: #666;
+}
+
+.viewModeSelect {
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  cursor: pointer;
+  background: #fff;
+  outline: none;
+}
+
+/* 播放控制条容器 */
+.playbackControlsContainer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+}
+
+/* 自车状态图表面板 */
+.egoMetricsPanel {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 2px;
+  padding: 10px;
+  margin-top: 10px;
+}
+
