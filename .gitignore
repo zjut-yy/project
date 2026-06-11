@@ -1,41 +1,23 @@
-*.bk
-__pycache__
-.DS_Store
+backend/dataset/
+backend/model/
+backend/gdrive/
 .env
 .env.local
-
-# Python / runtime artifacts
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Node / frontend build artifacts
-node_modules/
-.vite/
-dist/
-build/
-
-# Logs and temporary files
 logs/
+__pycache__/
+**/__pycache__/
+*.py[cod]
 *.log
-tmp/
-temp/
-
-# Large local assets: models, checkpoints, datasets, videos
-model/
-models/
-datasets/
-dataset/
-lora_checkpoints*/
-checkpoints/
+frontend/SpaceTimeCube/app/node_modules/
+frontend/SpaceTimeCube/app/.vite/
+frontend/SpaceTimeCube/app/dist/
+frontend/SpaceTimeCube/app/build/
 *.safetensors
 *.pt
 *.pth
 *.ckpt
 *.onnx
 *.bin
-*.whl
 *.mp4
 *.avi
 *.mov
