@@ -1,6 +1,8 @@
 *.bk
 __pycache__
 .DS_Store
+.env
+.env.local
 
 # Python / runtime artifacts
 *.py[cod]

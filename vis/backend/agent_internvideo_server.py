@@ -65,11 +65,37 @@ logger = logging.getLogger("agent_iv25")
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s - %(message)s")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODEL_DIR = Path(__file__).resolve().parent / "model" / "InternVideo2.5"
+VIS_DIR = Path(__file__).resolve().parents[1]
+BACKEND_DIR = Path(__file__).resolve().parent
+
+
+def _load_dotenv(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        return
+    try:
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except Exception as exc:
+        logger.warning("Failed to load env file %s: %s", path, exc)
+
+
+_load_dotenv(VIS_DIR / ".env")
+
+
+MODEL_ROOT = Path(os.environ.get("MODEL_ROOT", str(BACKEND_DIR / "model"))).expanduser()
+DATASET_ROOT = Path(os.environ.get("DATASET_ROOT", str(BACKEND_DIR / "dataset"))).expanduser()
+MODEL_DIR = Path(os.environ.get("INTERNVIDEO_MODEL_PATH", str(MODEL_ROOT / "InternVideo2.5"))).expanduser()
 MODEL_DIR_ALIAS = MODEL_DIR.parent / "InternVideo2"
 DEFAULT_PORT = int(os.environ.get("AGENT_PORT", "8010"))
 DISABLE_MODEL = os.environ.get("DISABLE_MODEL", "0") == "1"
-DEFAULT_FPS = 30.0
+DEFAULT_FPS = float(os.environ.get("DEFAULT_FPS", "30.0"))
 EVENT_MAX = int(os.environ.get("EVENT_MAX", "5"))
 IV_LOG_PROMPT_IO = os.environ.get("IV_LOG_PROMPT_IO", "1").strip() != "0"
 IV_LOG_MAX_CHARS = max(256, int(os.environ.get("IV_LOG_MAX_CHARS", "4000")))
@@ -227,12 +253,12 @@ def map_query_class_to_virat_classes(query_class: int) -> Set[int]:
 VLLM_URL = os.environ.get("VLLM_URL")  # e.g., http://localhost:8001/v1
 
 # VIRAT dataset configuration
-VIRAT_DATASET_DIR = Path(__file__).resolve().parent / "dataset" / "VIRAT"
-MEVA_DATASET_DIR = Path(__file__).resolve().parent / "dataset" / "MEVA"
+VIRAT_DATASET_DIR = Path(os.environ.get("VIRAT_DATASET_DIR", str(DATASET_ROOT / "VIRAT"))).expanduser()
+MEVA_DATASET_DIR = Path(os.environ.get("MEVA_DATASET_DIR", str(DATASET_ROOT / "MEVA"))).expanduser()
 
 # WildTrack dataset configuration
-WILDTRACK_DATASET_DIR = Path(__file__).resolve().parent / "dataset" / "WildTrack"
-WILDTRACK_VIRAT_DATASET_DIR = Path(__file__).resolve().parent / "dataset" / "WildTrack_VIRAT"
+WILDTRACK_DATASET_DIR = Path(os.environ.get("WILDTRACK_DATASET_DIR", str(DATASET_ROOT / "WildTrack"))).expanduser()
+WILDTRACK_VIRAT_DATASET_DIR = Path(os.environ.get("WILDTRACK_VIRAT_DATASET_DIR", str(DATASET_ROOT / "WildTrack_VIRAT"))).expanduser()
 
 class TimeReference(Enum):
     ABSOLUTE_SEC = "absolute_sec"
@@ -515,7 +541,7 @@ _generation_config = dict(
     num_beams=1,
 )
 
-QWEN_MODEL_DIR = Path(__file__).resolve().parent / "model" / "Qwen2.5-7B-Instruct"
+QWEN_MODEL_DIR = MODEL_ROOT / "Qwen2.5-7B-Instruct"
 QWEN_MODEL_PATH = os.environ.get("QWEN_MODEL_PATH", str(QWEN_MODEL_DIR))
 QWEN_MAX_NEW_TOKENS = int(os.environ.get("QWEN_MAX_NEW_TOKENS", "256"))
 QWEN_TEMPERATURE = float(os.environ.get("QWEN_TEMPERATURE", "0.2"))

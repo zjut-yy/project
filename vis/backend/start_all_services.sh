@@ -8,12 +8,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VIS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_ROOT="$(cd "$VIS_DIR/.." && pwd)"
 
-# 配置
-VLLM_ENV="/home/yangyu/ENTER/envs/vllm"
-MINICPM_ENV="/home/yangyu/ENTER/envs/minicpm"
+if [ -f "$VIS_DIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$VIS_DIR/.env"
+    set +a
+fi
+
+# 配置，可在 vis/.env 中覆盖
+VLLM_ENV="${VLLM_ENV:-/home/yangyu/ENTER/envs/vllm}"
+MINICPM_ENV="${MINICPM_ENV:-/home/yangyu/ENTER/envs/minicpm}"
 BACKEND_DIR="$SCRIPT_DIR"
-MODEL_DIR="$BACKEND_DIR/model"
-MODEL_NAME="Qwen2.5-7B-Instruct"
+MODEL_ROOT="${MODEL_ROOT:-$BACKEND_DIR/model}"
+MODEL_NAME="${VLLM_MODEL_NAME:-${QWEN_MODEL_NAME:-Qwen2.5-7B-Instruct}}"
+VLLM_HOST="${VLLM_HOST:-0.0.0.0}"
+VLLM_PORT="${VLLM_PORT:-8001}"
+AGENT_HOST="${AGENT_HOST:-0.0.0.0}"
+AGENT_PORT="${AGENT_PORT:-8010}"
+VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.5}"
+VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-4096}"
+VLLM_DTYPE="${VLLM_DTYPE:-float16}"
 
 # 日志目录
 LOG_DIR="$VIS_DIR/logs"
@@ -55,18 +69,18 @@ echo ""
 
 # 1. 启动vLLM服务器
 echo "1️⃣  启动 vLLM OpenAI API 服务器..."
-echo "   Port: 8001"
+echo "   Port: $VLLM_PORT"
 
 export LD_LIBRARY_PATH="$VLLM_ENV/lib:$LD_LIBRARY_PATH"
 
-cd "$MODEL_DIR"
+cd "$MODEL_ROOT"
 python3 -m vllm.entrypoints.openai.api_server \
   --model "./$MODEL_NAME" \
-  --host 0.0.0.0 \
-  --port 8001 \
-  --gpu-memory-utilization 0.5 \
-  --max-model-len 4096 \
-  --dtype float16 \
+  --host "$VLLM_HOST" \
+  --port "$VLLM_PORT" \
+  --gpu-memory-utilization "$VLLM_GPU_MEMORY_UTILIZATION" \
+  --max-model-len "$VLLM_MAX_MODEL_LEN" \
+  --dtype "$VLLM_DTYPE" \
   > "$VLLM_LOG" 2>&1 &
 
 VLLM_PID=$!
@@ -78,11 +92,12 @@ sleep 15
 # 2. 启动代理服务器
 echo ""
 echo "2️⃣  启动 MiniCPM-S 代理服务器..."
-echo "   Port: 8010"
+echo "   Port: $AGENT_PORT"
 
 cd "$BACKEND_DIR"
-export VLLM_URL="http://localhost:8001/v1"
-export AGENT_PORT="8010"
+export VLLM_URL="${VLLM_URL:-http://localhost:$VLLM_PORT/v1}"
+export AGENT_HOST
+export AGENT_PORT
 export LD_LIBRARY_PATH="$MINICPM_ENV/lib:$LD_LIBRARY_PATH"
 
 python3 agent_internvideo_server.py \
@@ -100,17 +115,17 @@ echo "✓ 服务已启动"
 echo "================================================"
 echo ""
 echo "vLLM API 服务器:"
-echo "  • URL: http://localhost:8001"
+echo "  • URL: http://localhost:$VLLM_PORT"
 echo "  • PID: $VLLM_PID"
 echo ""
 echo "MiniCPM-S 代理服务器:"
-echo "  • URL: http://localhost:8010"
+echo "  • URL: http://localhost:$AGENT_PORT"
 echo "  • PID: $AGENT_PID"
 echo ""
 echo "API 端点:"
-echo "  • 列出场景: GET http://localhost:8010/virat/scenes"
-echo "  • 查询场景: GET http://localhost:8010/virat/scenes/{scene_id}"
-echo "  • 分析场景: POST http://localhost:8010/virat/analyze"
+echo "  • 列出场景: GET http://localhost:$AGENT_PORT/virat/scenes"
+echo "  • 查询场景: GET http://localhost:$AGENT_PORT/virat/scenes/{scene_id}"
+echo "  • 分析场景: POST http://localhost:$AGENT_PORT/virat/analyze"
 echo ""
 echo "支持的数据集:"
 echo "  • VIRAT (7个场景)"

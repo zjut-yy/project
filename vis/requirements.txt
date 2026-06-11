@@ -1,0 +1,4 @@
+# Default dependency entry for the MiniCPM-S visualization backend.
+# The vLLM server is a separate environment; install it with:
+#   pip install -r requirements-vllm.txt
+-r requirements-minicpm.txt

@@ -1,0 +1,7 @@
+# vLLM serving environment
+# This environment is separate from the MiniCPM-S backend environment.
+# Install a CUDA-compatible torch build according to your driver/CUDA first if needed.
+
+vllm>=0.5.0
+openai==2.7.1
+httpx==0.28.1

@@ -1,6 +1,8 @@
 backend/dataset/
 backend/model/
 backend/gdrive/
+.env
+.env.local
 logs/
 __pycache__/
 **/__pycache__/
