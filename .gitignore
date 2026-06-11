@@ -1,0 +1,43 @@
+*.bk
+__pycache__
+.DS_Store
+
+# Python / runtime artifacts
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend build artifacts
+node_modules/
+.vite/
+dist/
+build/
+
+# Logs and temporary files
+logs/
+*.log
+tmp/
+temp/
+
+# Large local assets: models, checkpoints, datasets, videos
+model/
+models/
+datasets/
+dataset/
+lora_checkpoints*/
+checkpoints/
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.bin
+*.whl
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.tar
+*.tar.gz
+*.zip

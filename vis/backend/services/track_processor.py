@@ -51,7 +51,7 @@ def derive_fps(video_path: Optional[Path]) -> float:
         return legacy.DEFAULT_FPS
 
 
-def _parse_wildtrack_world_csv(tracks_path: Path) -> Optional[Tuple[List[Dict[str, Any]], Tuple[int, int]]]:
+def _parse_world_csv(tracks_path: Path) -> Optional[Tuple[List[Dict[str, Any]], Tuple[int, int]]]:
     tracks: Dict[int, Dict[str, Any]] = {}
     min_frame, max_frame = math.inf, -math.inf
 
@@ -122,10 +122,12 @@ def parse_tracks(
 ) -> Tuple[List[Dict[str, Any]], Tuple[int, int]]:
     tracks: Dict[int, Dict[str, Any]] = {}
     min_frame, max_frame = math.inf, -math.inf
-    is_wildtrack = (dataset_type or "").lower() == "wildtrack"
+    normalized_dataset_type = (dataset_type or "").lower()
+    is_wildtrack = normalized_dataset_type == "wildtrack"
+    is_world_dataset = normalized_dataset_type in {"wildtrack", "meva"}
 
-    if is_wildtrack and tracks_path.suffix.lower() == ".csv":
-        parsed = _parse_wildtrack_world_csv(tracks_path)
+    if tracks_path.suffix.lower() == ".csv" and is_world_dataset:
+        parsed = _parse_world_csv(tracks_path)
         if parsed is not None:
             return parsed
 

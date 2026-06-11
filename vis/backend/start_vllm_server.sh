@@ -4,9 +4,11 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODEL_DIR="$SCRIPT_DIR/model"
+
 # 配置
 VLLM_ENV="/home/yangyu/ENTER/envs/vllm"
-MODEL_DIR="/home/yangyu/MiniCPM-S/vis/backend/model"
 MODEL_NAME="Qwen2.5-7B-Instruct"
 
 # 检查环境

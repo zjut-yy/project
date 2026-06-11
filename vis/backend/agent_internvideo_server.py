@@ -28,21 +28,33 @@ except Exception:  # pragma: no cover
 
 try:
     import torch
-    import torchvision.transforms as T
-    from decord import VideoReader, cpu
-    from PIL import Image
-    from transformers import AutoModel, AutoTokenizer, AutoModelForCausalLM
-    from torchvision.transforms.functional import InterpolationMode
 except Exception:  # pragma: no cover
     torch = None
+
+try:
+    import torchvision.transforms as T
+    from torchvision.transforms.functional import InterpolationMode
+except Exception:  # pragma: no cover
     T = None
+    InterpolationMode = None
+
+try:
+    from decord import VideoReader, cpu
+except Exception:  # pragma: no cover
     VideoReader = None
     cpu = None
+
+try:
+    from PIL import Image
+except Exception:  # pragma: no cover
     Image = None
+
+try:
+    from transformers import AutoModel, AutoTokenizer, AutoModelForCausalLM
+except Exception:  # pragma: no cover
     AutoModel = None
     AutoTokenizer = None
     AutoModelForCausalLM = None
-    InterpolationMode = None
 
 try:
     import httpx
@@ -59,6 +71,18 @@ DEFAULT_PORT = int(os.environ.get("AGENT_PORT", "8010"))
 DISABLE_MODEL = os.environ.get("DISABLE_MODEL", "0") == "1"
 DEFAULT_FPS = 30.0
 EVENT_MAX = int(os.environ.get("EVENT_MAX", "5"))
+IV_LOG_PROMPT_IO = os.environ.get("IV_LOG_PROMPT_IO", "1").strip() != "0"
+IV_LOG_MAX_CHARS = max(256, int(os.environ.get("IV_LOG_MAX_CHARS", "4000")))
+
+
+def _clip_log_text(raw: Any, max_chars: int = IV_LOG_MAX_CHARS) -> str:
+    text = str(raw or "")
+    if not text:
+        return ""
+    flat = " ".join(text.splitlines()).strip()
+    if len(flat) <= max_chars:
+        return flat
+    return f"{flat[:max_chars]} ...(truncated, total={len(flat)} chars)"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -204,6 +228,7 @@ VLLM_URL = os.environ.get("VLLM_URL")  # e.g., http://localhost:8001/v1
 
 # VIRAT dataset configuration
 VIRAT_DATASET_DIR = Path(__file__).resolve().parent / "dataset" / "VIRAT"
+MEVA_DATASET_DIR = Path(__file__).resolve().parent / "dataset" / "MEVA"
 
 # WildTrack dataset configuration
 WILDTRACK_DATASET_DIR = Path(__file__).resolve().parent / "dataset" / "WildTrack"
@@ -486,9 +511,7 @@ _model = None
 _tokenizer = None
 _generation_config = dict(
     do_sample=False,
-    temperature=0.1,
     max_new_tokens=512,
-    top_p=0.8,
     num_beams=1,
 )
 
@@ -579,7 +602,7 @@ def derive_fps(video_path: Optional[Path]) -> float:
         return DEFAULT_FPS
 
 
-def _parse_wildtrack_world_csv(tracks_path: Path) -> Optional[Tuple[List[Dict[str, Any]], Tuple[int, int]]]:
+def _parse_world_csv(tracks_path: Path) -> Optional[Tuple[List[Dict[str, Any]], Tuple[int, int]]]:
     tracks: Dict[int, Dict[str, Any]] = {}
     min_frame, max_frame = math.inf, -math.inf
 
@@ -644,10 +667,12 @@ def _parse_wildtrack_world_csv(tracks_path: Path) -> Optional[Tuple[List[Dict[st
 def parse_tracks(tracks_path: Path, dataset_type: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Tuple[int, int]]:
     tracks = {}
     min_frame, max_frame = math.inf, -math.inf
-    is_wildtrack = (dataset_type or "").lower() == "wildtrack"
+    normalized_dataset_type = (dataset_type or "").lower()
+    is_wildtrack = normalized_dataset_type == "wildtrack"
+    is_world_dataset = normalized_dataset_type in {"wildtrack", "meva"}
 
-    if is_wildtrack and tracks_path.suffix.lower() == ".csv":
-        parsed = _parse_wildtrack_world_csv(tracks_path)
+    if tracks_path.suffix.lower() == ".csv" and is_world_dataset:
+        parsed = _parse_world_csv(tracks_path)
         if parsed is not None:
             return parsed
 
@@ -1676,14 +1701,37 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
 def build_transform(input_size: int):
-    if T is None:
+    if T is not None and InterpolationMode is not None:
+        return T.Compose([
+            T.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),
+            T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
+            T.ToTensor(),
+            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ])
+
+    # Fallback transform for environments without torchvision.
+    if torch is None or Image is None:
         return None
-    return T.Compose([
-        T.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),
-        T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
-        T.ToTensor(),
-        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-    ])
+
+    try:
+        import numpy as _np
+    except Exception:
+        return None
+
+    mean = torch.tensor(IMAGENET_MEAN, dtype=torch.float32).view(3, 1, 1)
+    std = torch.tensor(IMAGENET_STD, dtype=torch.float32).view(3, 1, 1)
+
+    def _fallback_transform(img):
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        # PIL's BICUBIC is available without torchvision.
+        img = img.resize((input_size, input_size), Image.BICUBIC)
+        arr = _np.asarray(img, dtype=_np.float32) / 255.0
+        tensor = torch.from_numpy(arr).permute(2, 0, 1).contiguous()
+        tensor = (tensor - mean) / std
+        return tensor
+
+    return _fallback_transform
 
 
 def find_closest_aspect_ratio(aspect_ratio: float, target_ratios: List[Tuple[int, int]], width: int, height: int, image_size: int):
@@ -1794,20 +1842,67 @@ def run_internvideo(
             pixel_values, num_patches_list = build_video_tokens(video_path, bound=bound, num_segments=64)
         if pixel_values is None or num_patches_list is None:
             return None
+        num_patches_list = [int(x) for x in num_patches_list if int(x) > 0]
+        if not num_patches_list:
+            return None
+        total_expected = int(sum(num_patches_list))
+        total_actual = int(pixel_values.shape[0])
+        if total_actual < total_expected:
+            logger.warning(
+                "model inference skipped: pixel count mismatch actual=%d expected=%d",
+                total_actual,
+                total_expected,
+            )
+            return None
+        if total_actual > total_expected:
+            pixel_values = pixel_values[:total_expected]
+
+        # InternVideo2.5 groups visual tokens by local_num_frames=4.
+        frame_count = len(num_patches_list)
+        local_num_frames = 4
+        usable_frames = (frame_count // local_num_frames) * local_num_frames
+        if usable_frames < local_num_frames:
+            logger.warning("model inference skipped: insufficient frames for local grouping, frames=%d", frame_count)
+            return None
+        if usable_frames != frame_count:
+            num_patches_list = num_patches_list[:usable_frames]
+            keep_patches = int(sum(num_patches_list))
+            pixel_values = pixel_values[:keep_patches]
+            logger.info("trimmed frame sequence for local grouping: %d -> %d", frame_count, usable_frames)
+
+        if int(pixel_values.shape[0]) != int(sum(num_patches_list)):
+            logger.warning(
+                "model inference skipped after trim: pixel count mismatch actual=%d expected=%d",
+                int(pixel_values.shape[0]),
+                int(sum(num_patches_list)),
+            )
+            return None
+
         target_dtype = next(model.parameters()).dtype
         pixel_values = pixel_values.to(model.device, dtype=target_dtype)  # type: ignore
         prefix = "".join([f"Frame{i+1}: <image>\n" for i in range(len(num_patches_list))])
         prompt = prefix + question
+        generation_config = dict(_generation_config)
+        if IV_LOG_PROMPT_IO:
+            logger.info(
+                "internvideo request frames=%d patches=%d chars=%d prompt=%s",
+                len(num_patches_list),
+                int(sum(num_patches_list)),
+                len(prompt),
+                _clip_log_text(prompt),
+            )
         with torch.no_grad():
             output, _ = model.chat(
                 tokenizer,
                 pixel_values,
                 prompt,
-                _generation_config,
+                generation_config,
                 num_patches_list=num_patches_list,
                 history=None,
                 return_history=True,
             )
+        if IV_LOG_PROMPT_IO:
+            logger.info("internvideo response chars=%d text=%s", len(str(output or "")), _clip_log_text(output))
         return output
     except Exception as exc:  # pragma: no cover
         logger.warning("model inference failed: %s", exc)
@@ -3021,47 +3116,50 @@ async def health():
 
 def scan_virat_scenes() -> List[Dict[str, Any]]:
     """
-    Scan both VIRAT and WildTrack dataset directories.
+    Scan VIRAT-like single-camera datasets and WildTrack.
     Returns list of scenes with scene_id, video_path, tracks_path, dataset_type.
     """
     scenes = []
-    
-    # Helper function for path conversion - FIXED VERSION
+
     def to_web_path(p: Path) -> str:
         """Convert absolute filesystem path to web-accessible path"""
-        # If it's not under REPO_ROOT, return as is
         try:
             rel = p.relative_to(REPO_ROOT)
         except ValueError:
             return str(p)
-        
-        # Convert to web path format
-        # REPO_ROOT = /home/yangyu/MiniCPM-S
-        # We want paths like: /backend/dataset/WildTrack/C1/img
+
         parts = list(rel.parts)
-        
-        # If path starts with 'vis/backend', remove 'vis' prefix
+
         if len(parts) >= 2 and parts[0] == 'vis' and parts[1] == 'backend':
-            # Remove 'vis' and keep '/backend/...'
             return '/' + '/'.join(parts[1:])
         elif len(parts) >= 1 and parts[0] == 'backend':
-            # Already starts with backend
             return '/' + '/'.join(parts)
         else:
-            # Default case - just add /backend prefix
             return '/backend/' + '/'.join(parts)
-    
-    # Scan VIRAT dataset (your existing code)
-    if VIRAT_DATASET_DIR.exists():
-        video_files = sorted(VIRAT_DATASET_DIR.glob("*.mp4"))
+
+    for dataset_dir, dataset_type, dataset_label in [
+        (VIRAT_DATASET_DIR, "virat", "VIRAT"),
+        (MEVA_DATASET_DIR, "meva", "MEVA"),
+    ]:
+        if not dataset_dir.exists():
+            logger.warning("%s dataset directory not found: %s", dataset_label, dataset_dir)
+            continue
+
+        fused_scene_manifests: List[Path] = []
+        if dataset_type == "meva":
+            fused_scene_manifests = sorted(dataset_dir.glob("meva_fused_*.scene.json"))
+
+        video_files = sorted(dataset_dir.glob("*.mp4"))
         for video_path in video_files:
             scene_id = video_path.stem
+            if scene_id.startswith("meva_fused_"):
+                continue
             tracks_path = video_path.parent / f"{scene_id}.viratdata.objects.txt"
-            
+
             duration = 0.0
             fps = DEFAULT_FPS
             frame_count = 0
-            
+
             if video_path.exists():
                 try:
                     if VideoReader is not None:
@@ -3071,10 +3169,12 @@ def scan_virat_scenes() -> List[Dict[str, Any]]:
                         duration = frame_count / fps if fps > 0 else 0.0
                 except Exception as e:
                     logger.warning(f"Error reading video {video_path}: {e}")
-            
+
             scene_info = {
                 "scene_id": scene_id,
-                "dataset_type": "virat",
+                "dataset_type": dataset_type,
+                "scene_mode": "single_camera",
+                "coordinate_space": "image",
                 "video_path": to_web_path(video_path),
                 "tracks_path": to_web_path(tracks_path),
                 "video_exists": video_path.exists(),
@@ -3082,64 +3182,116 @@ def scan_virat_scenes() -> List[Dict[str, Any]]:
                 "duration": duration,
                 "fps": fps,
                 "frame_count": frame_count,
+                "camera_sources": [],
             }
             scenes.append(scene_info)
-    else:
-        logger.warning(f"VIRAT dataset directory not found: {VIRAT_DATASET_DIR}")
-    
-    # FIXED: Scan WildTrack dataset
+
+        if dataset_type == "meva":
+            for manifest_path in fused_scene_manifests:
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    logger.warning("Error reading MEVA fused scene manifest %s: %s", manifest_path, e)
+                    continue
+                if not isinstance(manifest, dict):
+                    continue
+                world_file = str(manifest.get("world_tracks_file") or "").strip()
+                if not world_file:
+                    continue
+                world_tracks_path = manifest_path.parent / world_file
+                track_text_file = str(manifest.get("track_text_events_file") or "").strip()
+                track_text_events_path = manifest_path.parent / track_text_file if track_text_file else None
+                camera_sources_raw = manifest.get("camera_sources") if isinstance(manifest.get("camera_sources"), list) else []
+                camera_sources: List[Dict[str, Any]] = []
+                frame_count = 0
+                duration = 0.0
+                fps = DEFAULT_FPS
+                for item in camera_sources_raw:
+                    if not isinstance(item, dict):
+                        continue
+                    source_scene_id = item.get("scene_id")
+                    video_file = str(item.get("video_file") or "").strip()
+                    tracks_file = str(item.get("tracks_file") or "").strip()
+                    video_path = manifest_path.parent / video_file if video_file else None
+                    tracks_path = manifest_path.parent / tracks_file if tracks_file else None
+                    item_fps = safe_float(item.get("fps"), DEFAULT_FPS)
+                    item_frame_count = int(item.get("frame_count") or 0)
+                    item_duration = float(item.get("duration") or 0.0)
+                    fps = max(fps, item_fps)
+                    frame_count = max(frame_count, item_frame_count + int(item.get("frame_offset") or 0))
+                    duration = max(duration, item_duration + float(item.get("frame_offset") or 0) / max(item_fps or DEFAULT_FPS, 1e-6))
+                    camera_sources.append(
+                        {
+                            "scene_id": source_scene_id,
+                            "camera_id": item.get("camera_id"),
+                            "video_path": to_web_path(video_path) if video_path and video_path.exists() else None,
+                            "tracks_path": to_web_path(tracks_path) if tracks_path and tracks_path.exists() else None,
+                            "image_dir": item.get("image_dir"),
+                            "fps": item_fps,
+                            "frame_count": item_frame_count,
+                            "duration": item_duration,
+                            "frame_offset": int(item.get("frame_offset") or 0),
+                            "world_transform_mode": item.get("world_transform_mode"),
+                        }
+                    )
+                scenes.insert(
+                    0,
+                    {
+                        "scene_id": str(manifest.get("scene_id") or manifest_path.stem.replace(".scene", "")),
+                        "dataset_type": dataset_type,
+                        "scene_mode": "fused_multi_camera",
+                        "coordinate_space": str(manifest.get("coordinate_space") or "world"),
+                        "world_transform_mode": manifest.get("world_transform_mode"),
+                        "coordinate_note": manifest.get("coordinate_note"),
+                        "video_path": None,
+                        "tracks_path": to_web_path(world_tracks_path),
+                        "world_tracks_path": to_web_path(world_tracks_path),
+                        "track_text_events_path": to_web_path(track_text_events_path) if track_text_events_path and track_text_events_path.exists() else None,
+                        "video_exists": any(bool(x.get("video_path")) for x in camera_sources),
+                        "tracks_exists": world_tracks_path.exists(),
+                        "duration": duration,
+                        "fps": fps,
+                        "frame_count": frame_count,
+                        "fused": True,
+                        "camera_sources": camera_sources,
+                    },
+                )
+
     wildtrack_dirs = [d for d in [WILDTRACK_DATASET_DIR, WILDTRACK_VIRAT_DATASET_DIR] if d.exists()]
     if wildtrack_dirs:
         scene_file_map: Dict[str, Path] = {}
-        
-        # First, find all tracks files
+
         for wt_dir in wildtrack_dirs:
-            # Look for pattern: C1/WildTrack_C1.viratdata.objects.txt
-            # or WildTrack_C1.viratdata.objects.txt directly
             candidates = list(wt_dir.glob("**/*.viratdata.objects.txt"))
-            
+
             for p in sorted(candidates):
-                # Extract scene ID from filename (e.g., "WildTrack_C1" from "WildTrack_C1.viratdata.objects.txt")
                 scene_id = p.stem.replace(".viratdata.objects", "")
-                
-                # Check if this is the main tracks file (not a duplicate)
                 if scene_id not in scene_file_map:
-                    # Verify it's in the correct location (should be in a camera directory like C1/)
                     if p.parent.name.startswith('C') or p.parent == wt_dir:
                         scene_file_map[scene_id] = p
                         logger.info(f"Found WildTrack scene: {scene_id} at {p}")
 
-        # Process each found scene
+        wildtrack_target_fps = 2.0
+        wildtrack_target_frame_count = 2000
+        wildtrack_target_duration = wildtrack_target_frame_count / wildtrack_target_fps
+        per_camera_scenes: List[Dict[str, Any]] = []
+
         for scene_id in sorted(scene_file_map.keys()):
             tracks_path = scene_file_map[scene_id]
-            
-            # FIXED: Find the image directory
-            # Expected structure: .../WildTrack/C1/WildTrack_C1.viratdata.objects.txt
-            # Image directory should be: .../WildTrack/C1/img/
             img_dir = None
-            
-            # Try multiple possible image directory locations
+
             possible_img_dirs = [
-                # Same directory as tracks file, but with 'img' subdir
                 tracks_path.parent / "img",
-                # One level up, then camera dir + img
                 tracks_path.parent.parent / tracks_path.parent.name / "img",
-                # Direct under WildTrack dataset dir with camera name
                 WILDTRACK_DATASET_DIR / tracks_path.parent.name / "img",
-                # Under WildTrack_VIRAT with camera name
                 WILDTRACK_VIRAT_DATASET_DIR / tracks_path.parent.name / "img",
             ]
-            
+
             for candidate in possible_img_dirs:
                 if candidate.exists() and candidate.is_dir():
                     img_dir = candidate
                     logger.info(f"Found image directory for {scene_id}: {img_dir}")
                     break
-
-            # WildTrack rail uses rebuilt camera videos, fixed to 2fps and 2000 frames.
-            wildtrack_target_fps = 2.0
-            wildtrack_target_frame_count = 2000
-            wildtrack_target_duration = wildtrack_target_frame_count / wildtrack_target_fps
 
             camera_id = tracks_path.parent.name if tracks_path.parent.name.startswith('C') else 'unknown'
             rebuilt_video_path = None
@@ -3154,9 +3306,13 @@ def scan_virat_scenes() -> List[Dict[str, Any]]:
                     rebuilt_video_path,
                 )
 
+            world_tracks_path = WILDTRACK_DATASET_DIR / "world_coords" / f"{camera_id.upper()}_world.csv"
+            world_tracks_exists = world_tracks_path.exists() and world_tracks_path.is_file()
             scene_info = {
                 "scene_id": scene_id,
                 "dataset_type": "wildtrack",
+                "scene_mode": "single_camera",
+                "coordinate_space": "world" if world_tracks_exists else "image",
                 "video_path": to_web_path(rebuilt_video_path) if video_exists and rebuilt_video_path else None,
                 "image_dir": to_web_path(img_dir) if img_dir and img_dir.exists() else None,
                 "tracks_path": to_web_path(tracks_path),
@@ -3168,15 +3324,57 @@ def scan_virat_scenes() -> List[Dict[str, Any]]:
                 "frame_count": wildtrack_target_frame_count,
                 "camera_id": camera_id,
                 "raw_tracks_path": str(tracks_path),
+                "camera_sources": [],
             }
+            if world_tracks_exists:
+                scene_info["world_tracks_path"] = to_web_path(world_tracks_path)
+            per_camera_scenes.append(scene_info)
             scenes.append(scene_info)
+
+        world_fused_path = WILDTRACK_DATASET_DIR / "world_coords" / "wildtrack_7cams_world.csv"
+        world_fused_exists = world_fused_path.exists() and world_fused_path.is_file()
+        if world_fused_exists and per_camera_scenes:
+            camera_sources = []
+            for scene in sorted(per_camera_scenes, key=lambda item: item.get("camera_id") or ""):
+                camera_sources.append(
+                    {
+                        "scene_id": scene.get("scene_id"),
+                        "camera_id": scene.get("camera_id"),
+                        "video_path": scene.get("video_path"),
+                        "tracks_path": scene.get("tracks_path"),
+                        "image_dir": scene.get("image_dir"),
+                        "fps": scene.get("fps"),
+                        "frame_count": scene.get("frame_count"),
+                        "duration": scene.get("duration"),
+                    }
+                )
+            base_scene = camera_sources[0] if camera_sources else {}
+            scenes.insert(
+                0,
+                {
+                    "scene_id": "wildtrack_fused_7cams",
+                    "dataset_type": "wildtrack",
+                    "scene_mode": "fused_multi_camera",
+                    "coordinate_space": "world",
+                    "video_path": None,
+                    "tracks_path": to_web_path(world_fused_path),
+                    "world_tracks_path": to_web_path(world_fused_path),
+                    "video_exists": any(bool(scene.get("video_exists")) for scene in per_camera_scenes),
+                    "tracks_exists": True,
+                    "duration": max(float(scene.get("duration") or 0.0) for scene in per_camera_scenes),
+                    "fps": float(base_scene.get("fps") or wildtrack_target_fps),
+                    "frame_count": max(int(scene.get("frame_count") or 0) for scene in per_camera_scenes),
+                    "fused": True,
+                    "camera_sources": camera_sources,
+                },
+            )
     else:
         logger.warning(
             "WildTrack dataset directory not found: checked %s and %s",
             WILDTRACK_VIRAT_DATASET_DIR,
             WILDTRACK_DATASET_DIR,
         )
-    
+
     logger.info(f"Total: {len(scenes)} scenes from all datasets")
     return scenes
 
@@ -3254,7 +3452,7 @@ async def analyze_virat_scene(payload: Dict[str, Any] = Body(...)):
     if not scene:
         return {"error": f"Scene {scene_id} not found", "message": f"场景 {scene_id} 不存在"}
     
-    if scene["dataset_type"] == "virat" and not scene["video_exists"]:
+    if scene["dataset_type"] in {"virat", "meva"} and not scene["video_exists"]:
         return {"error": f"Video file not found for scene {scene_id}", "message": f"场景 {scene_id} 的视频文件不存在"}
     
     if not scene["tracks_exists"]:
@@ -3267,6 +3465,14 @@ async def analyze_virat_scene(payload: Dict[str, Any] = Body(...)):
     user_context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     context = dict(user_context)
     context["dataset_type"] = scene.get("dataset_type")
+    context["sceneMode"] = scene.get("scene_mode") or user_context.get("sceneMode") or "single_camera"
+    context["isFusedMultiCamera"] = bool(scene.get("scene_mode") == "fused_multi_camera")
+    if scene.get("world_tracks_path") and not context.get("worldTracksPath"):
+        context["worldTracksPath"] = scene.get("world_tracks_path")
+    if isinstance(scene.get("camera_sources"), list) and scene.get("camera_sources") and not context.get("cameraSources"):
+        context["cameraSources"] = scene.get("camera_sources")
+    if scene.get("fps") and not context.get("fps"):
+        context["fps"] = scene.get("fps")
 
     # Use existing analyze_video logic
     resp = assemble_response(

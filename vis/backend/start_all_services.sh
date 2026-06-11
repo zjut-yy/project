@@ -4,15 +4,19 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VIS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$VIS_DIR/.." && pwd)"
+
 # 配置
 VLLM_ENV="/home/yangyu/ENTER/envs/vllm"
 MINICPM_ENV="/home/yangyu/ENTER/envs/minicpm"
-BACKEND_DIR="/home/yangyu/MiniCPM-S/vis/backend"
+BACKEND_DIR="$SCRIPT_DIR"
 MODEL_DIR="$BACKEND_DIR/model"
 MODEL_NAME="Qwen2.5-7B-Instruct"
 
 # 日志目录
-LOG_DIR="/home/yangyu/MiniCPM-S/vis/logs"
+LOG_DIR="$VIS_DIR/logs"
 mkdir -p "$LOG_DIR"
 
 VLLM_LOG="$LOG_DIR/vllm_server.log"
@@ -25,7 +29,7 @@ cleanup() {
     echo "================================================"
     echo "关闭服务器..."
     echo "================================================"
-    
+
     if [ -f "$PID_FILE" ]; then
         while IFS= read -r pid; do
             if kill -0 "$pid" 2>/dev/null; then
@@ -37,7 +41,7 @@ cleanup() {
         done < "$PID_FILE"
         rm "$PID_FILE"
     fi
-    
+
     echo "✓ 已关闭所有服务"
 }
 
